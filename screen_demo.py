@@ -7,21 +7,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.cm import viridis, cividis, rainbow
 
-# 设置窗口大小和标题
-window_width = 1200
-window_height = 800
-grid_size = 200
-move_speed = 2  # 增加移动速度以便更明显地看到效果
-
-# 导数模式设置
-RING_RADIUS = 24   # 圆环半径
-RING_WIDTH = 10    # 圆环宽度
-num_segments = 720  # 将导数圆环分为180段，每段2度
-
-# 数值微分设置
-DZ_EPSILON = 1e-4  # 用于数值微分的小增量
-
-func_str = f"$f(z)=x+y+(x^2+y^2)i$"
 # 复数函数定义
 def complex_function(z):
     # 实现与显示公式一致的函数：z^3/2
@@ -31,6 +16,23 @@ def complex_function(z):
     # f = np.sinh(z)
     return f
 
+func_str = f"$f(z)=x+y+(x^2+y^2)i$"
+
+# 设置窗口大小和标题
+window_width = 1200
+window_height = 800
+grid_size = 200
+move_speed = 2  # 增加移动速度以便更明显地看到效果
+
+# 导数模式设置
+RING_RADIUS = 24    # 圆环半径
+RING_WIDTH = 10     # 圆环宽度
+num_segments = 360 # 将导数圆环分为180段，每段2度
+
+# 数值微分设置
+EPSILON = 1e-4  # 用于数值微分的小增量
+
+
 # 使用数值微分计算导数
 def numerical_derivative(z):
     """使用数值微分计算复数函数在点z处的导数
@@ -39,27 +41,23 @@ def numerical_derivative(z):
     # 创建一个列表来存储各个方向的导数值
     derivatives = []
     
-    # 设置dz的绝对值
-    dz_abs = DZ_EPSILON
-    
     # 对num_segments个不同辐角的dz进行计算
     for i in range(num_segments):
         # 计算当前dz的辐角（弧度）
         dz_angle = 2 * np.pi * i / num_segments
         
         # 根据辐角和绝对值计算dz
-        dz = complex(dz_abs * np.cos(dz_angle), dz_abs * np.sin(dz_angle))
+        dz = EPSILON * complex(np.cos(dz_angle), np.sin(dz_angle))
         
         # 计算该方向上的函数值差异
         try:
             df = complex_function(z + dz) - complex_function(z)
-            # 计算导数（df/dz）
             derivative = df / dz
             derivatives.append((dz_angle, derivative))
         except Exception:
             # 如果计算出错（例如函数在该点不可导），则跳过该方向
             continue
-    
+
     # 如果所有方向都计算失败，返回空列表
     if not derivatives:
         return []
@@ -67,7 +65,6 @@ def numerical_derivative(z):
     # 返回所有方向的导数值列表，每个元素是(角度,导数值)的元组
     return derivatives
     
-
 
 # 初始化pygame
 pygame.init()
