@@ -19,18 +19,26 @@ RING_WIDTH = 7    # 圆环宽度
 num_segments = 180  # 将导数圆环分为36段，每段10度
 
 func_str = f"$f(z)=z^3/2$"
-derivative_str = f"$f'(z)=3z^2/2$"
 # 复数函数定义
 def complex_function(z):
     # 实现与显示公式一致的函数：z^3/2
     f = z**3/2
     return f
 
-# 计算复数函数的导数
-def derivative_function(z):
-    # 对 f(z) = z^3/2 求导，得到 f'(z) = 3z^2/2
-    return 3 * z**2 / 2
-
+# 使用数值微分计算导数
+def numerical_derivative(z):
+    """使用数值微分计算复数函数在点z处的导数"""
+    # 在实部方向取小增量
+    dz_real = complex(DZ_EPSILON, 0)
+    df_real = (complex_function(z + dz_real) - complex_function(z)) / DZ_EPSILON
+    
+    # 在虚部方向取小增量
+    dz_imag = complex(0, DZ_EPSILON)
+    df_imag = (complex_function(z + dz_imag) - complex_function(z)) / DZ_EPSILON
+    
+    # 根据Cauchy-Riemann方程，复导数可以由实部导数和虚部导数计算
+    # df/dz = df/dx - i*df/dy
+    return (df_real + 1j * df_imag) / 2
 
 # 初始化pygame
 pygame.init()
@@ -175,7 +183,7 @@ def show_coordinates(pos, z_value, show_derivative=False):
     
     # 如果在导数模式下，显示导数值
     if show_derivative:
-        df_z = derivative_function(z_value)
+        df_z = numerical_derivative(z_value)
         text = chinese_font.render(f"导数值: ({df_z.real:.2f}, {df_z.imag:.2f}i)", True, GREEN)
         screen.blit(text, (10, 70))
 
@@ -213,7 +221,6 @@ def render_math_formula(formula, size=16):
 
 # 渲染数学公式
 formula_surface = render_math_formula(func_str)
-derivative_formula_surface = render_math_formula(derivative_str)
 
 # 绘制dz圆环函数
 def draw_dz_ring(x, y):
@@ -274,11 +281,8 @@ while running:
     # 绘制坐标系
     draw_coordinate_system()
     
-    # 显示函数公式
-    if derivative_mode:
-        screen.blit(derivative_formula_surface, (window_width - derivative_formula_surface.get_width() - 20, 20))
-    else:
-        screen.blit(formula_surface, (window_width - formula_surface.get_width() - 20, 20))
+    # 显示函数公式 - 始终只显示原始函数公式
+    screen.blit(formula_surface, (window_width - formula_surface.get_width() - 20, 20))
     
     # 绘制导数模式下的彩色圆环
     if derivative_mode:
@@ -385,8 +389,8 @@ while running:
                     mouse_x, mouse_y = pygame.mouse.get_pos()
                     z = mouse2Z(mouse_x, mouse_y)
                     
-                    # 计算导数
-                    df_z = derivative_function(z)
+                    # 计算导数 - 使用数值微分
+                    df_z = numerical_derivative(z)
                     
                     # 计算函数值位置
                     f_z = complex_function(z)
