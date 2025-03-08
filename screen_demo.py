@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.cm import viridis
 
 # 设置窗口大小和标题
 window_width = 1200
@@ -12,12 +13,23 @@ window_height = 800
 grid_size = 200
 move_speed = 2  # 增加移动速度以便更明显地看到效果
 
+# 导数模式设置
+RING_RADIUS = 20  # 圆环半径
+RING_WIDTH = 7    # 圆环宽度
+num_segments = 180  # 将导数圆环分为36段，每段10度
+
 func_str = f"$f(z)=z^3/2$"
+derivative_str = f"$f'(z)=3z^2/2$"
 # 复数函数定义
 def complex_function(z):
     # 实现与显示公式一致的函数：z^3/2
     f = z**3/2
     return f
+
+# 计算复数函数的导数
+def derivative_function(z):
+    # 对 f(z) = z^3/2 求导，得到 f'(z) = 3z^2/2
+    return 3 * z**2 / 2
 
 
 # 初始化pygame
@@ -54,6 +66,12 @@ mouse_trail = []
 function_trail = []
 # 新增标志，表示是否需要开始新的轨迹
 new_trail_segment = True
+
+# 导数模式标志
+derivative_mode = False
+
+# 存储当前显示的圆环信息
+ring_info = None
 
 # 初始化鼠标位置变量
 mouse_x, mouse_y = origin_x, origin_y
@@ -145,7 +163,7 @@ def update_function_point(mouse_pos):
     return f_pos
 
 # 显示当前坐标信息
-def show_coordinates(pos, z_value):
+def show_coordinates(pos, z_value, show_derivative=False):
     """显示当前坐标信息"""
     text = chinese_font.render(f"位置: ({z_value.real:.2f}, {z_value.imag:.2f}i)", True, WHITE)
     screen.blit(text, (10, 10))
@@ -154,6 +172,12 @@ def show_coordinates(pos, z_value):
     f_z = complex_function(z_value)
     text = chinese_font.render(f"函数值: ({f_z.real:.2f}, {f_z.imag:.2f}i)", True, YELLOW)
     screen.blit(text, (10, 40))
+    
+    # 如果在导数模式下，显示导数值
+    if show_derivative:
+        df_z = derivative_function(z_value)
+        text = chinese_font.render(f"导数值: ({df_z.real:.2f}, {df_z.imag:.2f}i)", True, GREEN)
+        screen.blit(text, (10, 70))
 
 # 创建数学公式渲染函数
 def render_math_formula(formula, size=16):
@@ -177,15 +201,68 @@ def render_math_formula(formula, size=16):
     canvas = FigureCanvasAgg(fig)
     canvas.draw()
     renderer = canvas.get_renderer()
-    raw_data = renderer.tostring_rgb()
+    # 使用buffer_rgba代替已弃用的tostring_rgb
+    raw_data = renderer.buffer_rgba()
+    # 将memoryview对象转换为bytes对象
+    raw_data = bytes(raw_data)
     size = canvas.get_width_height()
     
-    # 创建pygame表面
-    surf = pygame.image.fromstring(raw_data, size, "RGB")
+    # 创建pygame表面，注意使用RGBA格式而不是RGB
+    surf = pygame.image.fromstring(raw_data, size, "RGBA")
     return surf
 
 # 渲染数学公式
 formula_surface = render_math_formula(func_str)
+derivative_formula_surface = render_math_formula(derivative_str)
+
+# 绘制dz圆环函数
+def draw_dz_ring(x, y):
+    """在指定位置绘制表示dz的彩色圆环"""
+    # 圆环的角度范围：0-360度
+    for i in range(num_segments):
+        # 计算当前段的起始和结束角度（弧度）
+        start_angle = 2 * np.pi * i / num_segments
+        end_angle = 2 * np.pi * (i + 1) / num_segments
+        
+        # 计算颜色（使用viridis色彩映射）
+        color_val = i / num_segments
+        color = tuple(int(c * 255) for c in viridis(color_val)[:3])
+        
+        # 绘制圆弧段
+        pygame.draw.arc(screen, color, 
+                        [x - RING_RADIUS, y - RING_RADIUS, 
+                         2 * RING_RADIUS, 2 * RING_RADIUS], 
+                        start_angle, end_angle, RING_WIDTH)
+
+# 绘制df变形环函数
+def draw_df_ring(x, y, df_z):
+    """在指定位置绘制表示df的变形环"""
+    # 获取导数的模和辐角
+    df_abs = abs(df_z)
+    df_angle = np.angle(df_z)
+
+    for i in range(num_segments):
+        # 计算dz的角度（弧度）
+        dz_angle = 2 * np.pi * i / num_segments
+        
+        # 计算对应的df角度（弧度）
+        # df的角度 = dz的角度 + 导数的辐角
+        df_segment_angle = dz_angle + df_angle
+        
+        # 计算颜色（使用viridis色彩映射，与dz对应段相同）
+        color_val = i / num_segments
+        color = tuple(int(c * 255) for c in viridis(color_val)[:3])
+        
+        # 计算变形环上的点
+        # 半径根据导数的模进行缩放
+        radius = RING_RADIUS * df_abs
+        start_x = x + radius * np.cos(df_segment_angle - np.pi/num_segments)
+        start_y = y + radius * np.sin(df_segment_angle - np.pi/num_segments)
+        end_x = x + radius * np.cos(df_segment_angle)
+        end_y = y + radius * np.sin(df_segment_angle)
+        
+        # 绘制弧段（由于可能不是圆形，所以使用线段代替弧）
+        pygame.draw.line(screen, color, (start_x, start_y), (end_x, end_y), RING_WIDTH)
 
 # 主循环
 running = True
@@ -198,10 +275,32 @@ while running:
     draw_coordinate_system()
     
     # 显示函数公式
-    screen.blit(formula_surface, (window_width - formula_surface.get_width() - 20, 20))
+    if derivative_mode:
+        screen.blit(derivative_formula_surface, (window_width - derivative_formula_surface.get_width() - 20, 20))
+    else:
+        screen.blit(formula_surface, (window_width - formula_surface.get_width() - 20, 20))
     
+    # 绘制导数模式下的彩色圆环
+    if derivative_mode:
+        # 显示鼠标
+        pygame.mouse.set_visible(True)
+        
+        # 获取鼠标位置
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        
+        # 在鼠标位置绘制红色圆点
+        pygame.draw.circle(screen, RED, (mouse_x, mouse_y), 5)
+        
+        # 显示当前坐标信息（包括导数）
+        show_coordinates((mouse_x, mouse_y), mouse2Z(mouse_x, mouse_y), True)
+        
+        # 如果有已保存的圆环信息，则绘制圆环
+        if ring_info is not None:
+            input_pos, output_pos, df_z = ring_info
+            draw_dz_ring(*input_pos)
+            draw_df_ring(*output_pos, df_z)
     # 如果在跟踪模式下
-    if tracking_mode:
+    elif tracking_mode:
         # 隐藏鼠标
         pygame.mouse.set_visible(False)
         
@@ -265,37 +364,63 @@ while running:
             if event.key == pygame.K_ESCAPE:  # ESC键清除轨迹，不退出程序
                 mouse_trail = []
                 function_trail = []
+                ring_info = None  # 清除圆环信息
             elif event.key == pygame.K_c:  # C键清除轨迹
                 mouse_trail = []
                 function_trail = []
+                ring_info = None  # 清除圆环信息
+            elif event.key == pygame.K_p:  # P键切换导数模式
+                derivative_mode = not derivative_mode
+                # 清除轨迹
+                mouse_trail = []
+                function_trail = []
+                ring_info = None  # 清除圆环信息
+                # 如果进入导数模式，退出跟踪模式
+                if derivative_mode:
+                    tracking_mode = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:  # 鼠标左键
-                # 进入跟踪模式
-                tracking_mode = True
-                mouse_x, mouse_y = pygame.mouse.get_pos()
-                
-                # 如果需要开始新的轨迹段
-                if new_trail_segment:
-                    # 不清除现有轨迹，而是添加None作为分隔符
-                    # 确保在添加新点之前添加分隔符，防止连接到上一段轨迹
-                    if mouse_trail and function_trail:
-                        mouse_trail.append(None)
-                        function_trail.append(None)
-                    
-                    # 添加新的起始点
-                    mouse_trail.append((mouse_x, mouse_y))
-                    
-                    # 计算初始函数值
+                if derivative_mode:
+                    # 在导数模式下，绘制彩色圆环
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
                     z = mouse2Z(mouse_x, mouse_y)
-                    f_z = complex_function(z)
-                    f_pos = z2mouse(f_z)
-                    function_trail.append(f_pos)
                     
-                    # 重置标志
-                    new_trail_segment = False
+                    # 计算导数
+                    df_z = derivative_function(z)
+                    
+                    # 计算函数值位置
+                    f_z = complex_function(z)
+                    f_pos_x, f_pos_y = z2mouse(f_z)
+                    
+                    # 保存圆环信息，而不是直接绘制
+                    ring_info = ((mouse_x, mouse_y), (f_pos_x, f_pos_y), df_z)
                 else:
-                    # 继续现有轨迹
-                    f_pos = update_function_point((mouse_x, mouse_y))
+                    # 进入跟踪模式
+                    tracking_mode = True
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    
+                    # 如果需要开始新的轨迹段
+                    if new_trail_segment:
+                        # 不清除现有轨迹，而是添加None作为分隔符
+                        # 确保在添加新点之前添加分隔符，防止连接到上一段轨迹
+                        if mouse_trail and function_trail:
+                            mouse_trail.append(None)
+                            function_trail.append(None)
+                        
+                        # 添加新的起始点
+                        mouse_trail.append((mouse_x, mouse_y))
+                        
+                        # 计算初始函数值
+                        z = mouse2Z(mouse_x, mouse_y)
+                        f_z = complex_function(z)
+                        f_pos = z2mouse(f_z)
+                        function_trail.append(f_pos)
+                        
+                        # 重置标志
+                        new_trail_segment = False
+                    else:
+                        # 继续现有轨迹
+                        f_pos = update_function_point((mouse_x, mouse_y))
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:  # 鼠标左键释放
                 # 继续保持跟踪模式，不清除轨迹
