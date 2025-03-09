@@ -9,14 +9,13 @@ from matplotlib.cm import viridis, cividis, rainbow
 
 # 复数函数定义
 def complex_function(z):
-    # 实现与显示公式一致的函数：z^3/2
     x = np.real(z)
     y = np.imag(z)
-    f = complex(x+y, x**2+y**2)
+    f = (x+y) + (x**2-y**2)*1j
     # f = np.sinh(z)
     return f
 
-func_str = f"$f(z)=x+y+(x^2+y^2)i$"
+func_str = f"$f(z)=x+y+(x^2-y^2)i$"
 
 # 设置窗口大小和标题
 window_width = 1200
@@ -32,39 +31,6 @@ num_segments = 360 # 将导数圆环分为180段，每段2度
 # 数值微分设置
 EPSILON = 1e-4  # 用于数值微分的小增量
 
-
-# 使用数值微分计算导数
-def numerical_derivative(z):
-    """使用数值微分计算复数函数在点z处的导数
-    返回一个列表，包含不同方向上的导数值
-    """
-    # 创建一个列表来存储各个方向的导数值
-    derivatives = []
-    
-    # 对num_segments个不同辐角的dz进行计算
-    for i in range(num_segments):
-        # 计算当前dz的辐角（弧度）
-        dz_angle = 2 * np.pi * i / num_segments
-        
-        # 根据辐角和绝对值计算dz
-        dz = EPSILON * complex(np.cos(dz_angle), np.sin(dz_angle))
-        
-        # 计算该方向上的函数值差异
-        try:
-            df = complex_function(z + dz) - complex_function(z)
-            derivative = df / dz
-            derivatives.append((dz_angle, derivative))
-        except Exception:
-            # 如果计算出错（例如函数在该点不可导），则跳过该方向
-            continue
-
-    # 如果所有方向都计算失败，返回空列表
-    if not derivatives:
-        return []
-    
-    # 返回所有方向的导数值列表，每个元素是(角度,导数值)的元组
-    return derivatives
-    
 
 # 初始化pygame
 pygame.init()
@@ -109,6 +75,25 @@ ring_info_list = []
 
 # 初始化鼠标位置变量
 mouse_x, mouse_y = origin_x, origin_y
+
+
+# 使用数值微分计算导数（向量化版本）
+def numerical_derivative(z):
+    """使用数值微分计算复数函数在点z处的导数
+    返回一个列表，包含不同方向上的导数值
+    """
+    # 生成所有角度
+    dz_angles = np.linspace(0, 2 * np.pi, num_segments, endpoint=False)
+    
+    # 计算所有方向的dz（向量化）
+    dzs = EPSILON * (np.cos(dz_angles) + 1j * np.sin(dz_angles))
+    
+    # 计算所有方向的函数值差异（向量化）
+    dfs = complex_function(z + dzs) - complex_function(z)
+    dfs = dfs / EPSILON
+    # 返回(角度, 导数值)的元组列表
+    return dz_angles, dfs
+
 
 # 坐标转换函数
 def mouse2Z(mousex, mousey):
@@ -262,23 +247,20 @@ def draw_dz_ring(x, y):
                         start_angle, end_angle, RING_WIDTH)
 
 # 绘制df变形环函数
-def draw_df_ring(x, y, df_derivatives):
+def draw_df_ring(x, y, dz_angles, dfs):
     """在指定位置绘制表示df的变形环
     df_derivatives: 包含多个方向导数值的列表，每个元素是(角度,导数值)的元组
     """
     # 遍历每个方向的导数值
-    for dz_angle, df_z in df_derivatives:
+    N = len(dz_angles)
+    for i in range(N):
         # 获取当前方向导数的模和辐角
-        df_abs = abs(df_z)
-        df_angle = np.angle(df_z)
-        
-        # 计算对应的df角度（弧度）
-        # df的角度 = dz的角度 + 导数的辐角
-        df_segment_angle = dz_angle + df_angle
+        df_abs = abs(dfs[i])
+        df_angle = np.angle(dfs[i])
         
         # 计算颜色（使用viridis色彩映射，使用df角度索引）
-        # 将df_segment_angle归一化到[0, 1]范围内来选择颜色
-        color_val = (dz_angle % (2 * np.pi)) / (2 * np.pi)  # 保持与dz环相同的颜色映射
+        # 将df_angle一化到[0, 1]范围内来选择颜色
+        color_val = (dz_angles[i] % (2 * np.pi)) / (2 * np.pi)  # 保持与dz环相同的颜色映射
         color = tuple(int(c * 255) for c in rainbow(color_val)[:3])
         
         # 计算变形环上的点
@@ -286,10 +268,10 @@ def draw_df_ring(x, y, df_derivatives):
         radius = RING_RADIUS * df_abs
         # 计算当前段的起始和结束点
         segment_width = 2 * np.pi / num_segments
-        start_x = x + radius * np.cos(df_segment_angle - segment_width/2)
-        start_y = y - radius * np.sin(df_segment_angle - segment_width/2)
-        end_x = x + radius * np.cos(df_segment_angle + segment_width/2)
-        end_y = y - radius * np.sin(df_segment_angle + segment_width/2)
+        start_x = x + radius * np.cos(df_angle - segment_width/2)
+        start_y = y - radius * np.sin(df_angle - segment_width/2)
+        end_x = x + radius * np.cos(df_angle + segment_width/2)
+        end_y = y - radius * np.sin(df_angle + segment_width/2)
         
         # 绘制弧段（由于可能不是圆形，所以使用线段代替弧）
         pygame.draw.line(screen, color, (start_x, start_y), (end_x, end_y), RING_WIDTH)
@@ -323,9 +305,9 @@ while running:
         
         # 如果有已保存的圆环信息，则绘制所有圆环
         for ring_info in ring_info_list:
-            input_pos, output_pos, df_z = ring_info
+            input_pos, output_pos, dz_angles, dfs = ring_info
             draw_dz_ring(*input_pos)
-            draw_df_ring(*output_pos, df_z)
+            draw_df_ring(*output_pos, dz_angles, dfs)
     # 如果在跟踪模式下
     elif tracking_mode:
         # 隐藏鼠标
@@ -413,14 +395,14 @@ while running:
                     z = mouse2Z(mouse_x, mouse_y)
                     
                     # 计算导数 - 使用数值微分，获取多个方向的导数值
-                    df_derivatives = numerical_derivative(z)
+                    dz_angles, dfs = numerical_derivative(z)
                     
                     # 计算函数值位置
                     f_z = complex_function(z)
                     f_pos_x, f_pos_y = z2mouse(f_z)
                     
                     # 保存圆环信息到列表中，不再覆盖之前的圆环
-                    ring_info_list.append(((mouse_x, mouse_y), (f_pos_x, f_pos_y), df_derivatives))
+                    ring_info_list.append(((mouse_x, mouse_y), (f_pos_x, f_pos_y), dz_angles, dfs))
                 else:
                     # 进入跟踪模式
                     tracking_mode = True
