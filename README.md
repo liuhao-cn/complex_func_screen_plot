@@ -11,6 +11,7 @@
 - 支持多段轨迹绘制
 - 清晰的坐标系统和刻度显示
 - 导数可视化模式，直观展示复变函数的局部行为
+- 高质量抗锯齿绘制，提供平滑的视觉效果
 
 ## 操作范例
 
@@ -30,7 +31,13 @@
 运行此程序需要以下Python库：
 
 ```bash
-pip install pygame numpy matplotlib
+pip install pygame numpy matplotlib scipy
+```
+
+或使用requirements.txt安装依赖：
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## 使用方法
@@ -84,18 +91,38 @@ python screen_demo.py
    - 圆环半径表示 dz 和 df 的绝对值关系
    - 点击鼠标左键在不同位置添加多个导数环，观察函数在不同区域的变化特性
    - 通过导数环的形状和颜色变化，直观理解函数的保角性和伸缩性
+   - 采用抗锯齿和过采样技术，呈现平滑的高质量导数环
 
 ## 自定义函数
 
-当前示例使用的是复数函数 f(z) = z³/2，您可以通过修改代码中的`complex_function`函数来可视化其他复数函数：
+当前示例使用的是复数函数 f(z) = (x-y)²+(x²-y²)i，您可以通过修改代码中的`complex_function`函数来可视化其他复数函数：
 
 ```python
 def complex_function(z):
-    return z**3/2
+    x = np.real(z)
+    y = np.imag(z)
+    f = (x-y)**2 + (x**2-y**2)*1j
+    return f
 ```
+
+其他常见函数示例：
+```python
+def complex_function(z):
+    return np.sinh(z)  # 双曲正弦函数
+    # return z**3/2    # 立方函数除以2
+    # return np.exp(z) # 指数函数
+```
+
+## 技术细节
+
+- **数值微分**：使用有限差分法计算各方向的导数值
+- **抗锯齿绘制**：通过透明表面和多边形填充实现平滑的图形渲染
+- **过采样技术**：增加采样点数量以获得更平滑的视觉效果
+- **插值算法**：使用线性插值在采样点之间生成平滑过渡
 
 ## 注意事项
 
 - 程序需要支持中文显示的字体
 - 建议在分辨率不低于1200x800的显示器上运行
-- 如果遇到性能问题，可以调整`grid_size`和`move_speed`参数
+- 如果遇到性能问题，可以调整`oversample`和`num_segments`参数
+- 需要支持OpenGL的显示设备以获得最佳性能
