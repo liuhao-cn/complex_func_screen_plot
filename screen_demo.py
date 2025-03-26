@@ -1,39 +1,92 @@
 import pygame
 import sys
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.cm import viridis, cividis, rainbow
-from scipy.interpolate import interp1d
-import cairo  # 新增 Cairo 导入
+from matplotlib.cm import viridis
+import cairo
 
-# 复数函数定义
+# ========== 常量定义 ==========
+# 窗口设置
+WINDOW_WIDTH = 1600
+WINDOW_HEIGHT = 1200
+GRID_SIZE = 200
+MOVE_SPEED = 2
+
+# 导数环设置
+RING_RADIUS = 24
+RING_WIDTH = 10
+NUM_SEGMENTS = 360
+OVERSAMPLE = 1
+EPSILON = 1e-4
+
+# 颜色定义
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+YELLOW = (255, 255, 0)
+
+# 复数函数公式
+FUNC_STR = "$f(z)=x+y+(x^2-y^2)i$"
+
+# ========== 函数定义 ==========
 def complex_function(z):
+    """定义要可视化的复数函数"""
     x = np.real(z)
     y = np.imag(z)
-    f = (x-y)**2 + (x**2-y**2)*1j
-    # f = np.sinh(z)
-    return f
+    return x + y + (x**2 - y**2)*1j
 
-func_str = f"$f(z)=(x-y)^2+(x^2-y^2)i$"
+def numerical_derivative(z):
+    """使用数值微分计算复数函数在点z处的导数"""
+    dz_angles = np.linspace(0, 2 * np.pi, NUM_SEGMENTS, endpoint=False)
+    dzs = EPSILON * (np.cos(dz_angles) + 1j * np.sin(dz_angles))
+    dfs = complex_function(z + dzs) - complex_function(z)
+    return dz_angles, dfs / EPSILON
 
-# 设置窗口大小和标题
-window_width = 1200
-window_height = 800
-grid_size = 200
-move_speed = 2  # 增加移动速度以便更明显地看到效果
+def mouse2Z(mousex, mousey, origin_x, origin_y):
+    """屏幕坐标转复平面坐标"""
+    return complex((mousex - origin_x) / GRID_SIZE, 
+                  -(mousey - origin_y) / GRID_SIZE)
 
-# 导数模式设置
-RING_RADIUS = 24    # 圆环半径
-RING_WIDTH = 10     # 圆环宽度
-num_segments = 360  # 将导数圆环分为120段，每段2度
-oversample = 1      # 更高的过采样因子
+def z2mouse(z, origin_x, origin_y):
+    """复平面坐标转屏幕坐标"""
+    return (int(z.real * GRID_SIZE) + origin_x, 
+            int(-z.imag * GRID_SIZE) + origin_y)
 
-# 数值微分设置
-EPSILON = 1e-4  # 用于数值微分的小增量
+def render_math_formula(formula, size=16):
+    """使用matplotlib渲染数学公式为Pygame表面"""
+    fig = Figure(figsize=(3, 1), dpi=150)
+    fig.patch.set_facecolor('black')
+    ax = fig.add_subplot(111)
+    ax.patch.set_facecolor('black')
+    ax.axis('off')
+    ax.text(1.1, 0.5, formula, fontsize=size, ha='right', 
+            va='center', color='white')
+    
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    raw_data = bytes(canvas.get_renderer().buffer_rgba())
+    return pygame.image.fromstring(raw_data, canvas.get_width_height(), "RGBA")
 
+# ========== 主程序初始化 ==========
+def init_pygame():
+    """初始化Pygame环境"""
+    pygame.init()
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), 
+                                   pygame.DOUBLEBUF | pygame.HWSURFACE)
+    pygame.display.set_caption("复数函数可视化")
+    return screen
+
+def load_fonts():
+    """加载中文字体"""
+    try:
+        chinese_font = pygame.font.Font("C:\\Windows\\Fonts\\simhei.ttf", 24)
+        small_font = pygame.font.Font("C:\\Windows\\Fonts\\simhei.ttf", 20)
+    except:
+        print("无法加载中文字体，将使用系统默认字体")
+        chinese_font = pygame.font.SysFont(None, 24)
+        small_font = pygame.font.SysFont(None, 20)
+    return chinese_font, small_font
 
 # 初始化pygame
 pygame.init()
@@ -48,20 +101,12 @@ except:
     small_chinese_font = pygame.font.SysFont(None, 20)
 
 # 创建窗口
-screen = pygame.display.set_mode((window_width, window_height), pygame.DOUBLEBUF | pygame.HWSURFACE)
+screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.DOUBLEBUF | pygame.HWSURFACE)
 pygame.display.set_caption("复数函数可视化")
 
-# 设置颜色
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)  # 鼠标轨迹和坐标轴
-YELLOW = (255, 255, 0)  # 函数值轨迹
-GREEN = (0, 255, 0)  # 额外颜色
-BLUE = (0, 0, 255)  # 额外颜色
-
 # 坐标轴原点(窗口中心)
-origin_x = window_width // 2
-origin_y = window_height // 2
+origin_x = WINDOW_WIDTH // 2
+origin_y = WINDOW_HEIGHT // 2
 
 # 跟踪模式标志和轨迹点列表
 tracking_mode = False
@@ -89,7 +134,7 @@ def numerical_derivative(z):
     返回一个列表，包含不同方向上的导数值
     """
     # 生成所有角度
-    dz_angles = np.linspace(0, 2 * np.pi, num_segments, endpoint=False)
+    dz_angles = np.linspace(0, 2 * np.pi, NUM_SEGMENTS, endpoint=False)
     
     # 计算所有方向的dz（向量化）
     dzs = EPSILON * (np.cos(dz_angles) + 1j * np.sin(dz_angles))
@@ -100,37 +145,38 @@ def numerical_derivative(z):
     # 返回(角度, 导数值)的元组列表
     return dz_angles, dfs
 
-
 # 坐标转换函数
 def mouse2Z(mousex, mousey):
-    """将屏幕坐标转换为复平面坐标"""
-    return complex((mousex - origin_x) / grid_size, -(mousey - origin_y) / grid_size)
+    """屏幕坐标转复平面坐标"""
+    return complex((mousex - origin_x) / GRID_SIZE, 
+                  -(mousey - origin_y) / GRID_SIZE)
 
 def z2mouse(z):
-    """将复平面坐标转换为屏幕坐标"""
-    return int(z.real * grid_size ) + origin_x, int(-z.imag * grid_size ) + origin_y
+    """复平面坐标转屏幕坐标"""
+    return (int(z.real * GRID_SIZE) + origin_x, 
+            int(-z.imag * GRID_SIZE) + origin_y)
 
 # 绘制函数
 def draw_coordinate_system():
     """绘制坐标系"""
     # 绘制坐标轴
-    pygame.draw.line(screen, RED, (0, origin_y), (window_width, origin_y), 2)  # x轴
-    pygame.draw.line(screen, RED, (origin_x, 0), (origin_x, window_height), 2)  # y轴
+    pygame.draw.line(screen, RED, (0, origin_y), (WINDOW_WIDTH, origin_y), 2)  # x轴
+    pygame.draw.line(screen, RED, (origin_x, 0), (origin_x, WINDOW_HEIGHT), 2)  # y轴
     
     # 绘制刻度
-    for x in range(0, window_width, grid_size):
+    for x in range(0, WINDOW_WIDTH, GRID_SIZE):
         pygame.draw.line(screen, WHITE, (x, origin_y-5), (x, origin_y+5), 1)
         # 添加刻度值
         if x != origin_x:  # 不在原点绘制0
-            value = (x - origin_x) / grid_size
+            value = (x - origin_x) / GRID_SIZE
             text = small_chinese_font.render(f"{value:.1f}", True, WHITE)
             screen.blit(text, (x - 10, origin_y + 10))
     
-    for y in range(0, window_height, grid_size):
+    for y in range(0, WINDOW_HEIGHT, GRID_SIZE):
         pygame.draw.line(screen, WHITE, (origin_x-5, y), (origin_x+5, y), 1)
         # 添加刻度值
         if y != origin_y:  # 不在原点绘制0
-            value = -(y - origin_y) / grid_size
+            value = -(y - origin_y) / GRID_SIZE
             text = small_chinese_font.render(f"{value:.1f}", True, WHITE)
             screen.blit(text, (origin_x + 10, y - 10))
 
@@ -231,16 +277,22 @@ def render_math_formula(formula, size=16):
     return surf
 
 # 渲染数学公式
-formula_surface = render_math_formula(func_str)
+formula_surface = render_math_formula(FUNC_STR)
 
 # 修改环绘制函数为接受上下文的形式
 def draw_dz_ring_on_context(ctx, x, y):
-    """在给定的Cairo上下文中绘制dz环"""
+    """
+    在给定的Cairo上下文中绘制dz环(输入环)
+    
+    参数:
+        ctx: Cairo绘图上下文
+        x, y: 环中心屏幕坐标
+    """
     # 设置高质量抗锯齿
     ctx.set_antialias(cairo.ANTIALIAS_BEST)
     
     # 增加采样点以获得更平滑的环
-    num_render_segments = num_segments * oversample
+    num_render_segments = NUM_SEGMENTS * OVERSAMPLE
     
     # 绘制平滑圆环
     for i in range(num_render_segments):
@@ -249,8 +301,8 @@ def draw_dz_ring_on_context(ctx, x, y):
         next_angle = 2 * np.pi * (i + 1) / num_render_segments
         
         # 映射到原始段以获取颜色
-        orig_angle_idx = int((i * num_segments) / num_render_segments)
-        color_val = orig_angle_idx / num_segments
+        orig_angle_idx = int((i * NUM_SEGMENTS) / num_render_segments)
+        color_val = orig_angle_idx / NUM_SEGMENTS
         r, g, b, _ = viridis(color_val)
         
         # 创建路径
@@ -275,7 +327,15 @@ def draw_dz_ring_on_context(ctx, x, y):
         ctx.stroke()
 
 def draw_df_ring_on_context(ctx, x, y, dz_angles, dfs):
-    """在给定的Cairo上下文中绘制df环"""
+    """
+    在给定的Cairo上下文中绘制df环(输出环)
+    
+    参数:
+        ctx: Cairo绘图上下文
+        x, y: 环中心屏幕坐标
+        dz_angles: 导数角度数组
+        dfs: 导数值数组
+    """
     # 设置高质量抗锯齿
     ctx.set_antialias(cairo.ANTIALIAS_BEST)
     
@@ -283,7 +343,7 @@ def draw_df_ring_on_context(ctx, x, y, dz_angles, dfs):
     df_abs_values = np.array([abs(df) for df in dfs])
     
     # 创建平滑插值版本的半径
-    smooth_angles = np.linspace(0, 2*np.pi, num_segments*oversample, endpoint=False)
+    smooth_angles = np.linspace(0, 2*np.pi, NUM_SEGMENTS*OVERSAMPLE, endpoint=False)
     
     # 扩展角度和模值数组以确保环形闭合
     angles_ext = np.append(dz_angles, dz_angles[0] + 2*np.pi)
@@ -317,7 +377,7 @@ def draw_df_ring_on_context(ctx, x, y, dz_angles, dfs):
         next_radius = RING_RADIUS * next_radius
         
         # 确定颜色（与dz环保持一致的颜色映射）
-        orig_angle_idx = int((i * num_segments) / (num_segments * oversample))
+        orig_angle_idx = int((i * NUM_SEGMENTS) / (NUM_SEGMENTS * OVERSAMPLE))
         color_val = (dz_angles[orig_angle_idx] % (2 * np.pi)) / (2 * np.pi)
         r, g, b, _ = viridis(color_val)
         
@@ -368,7 +428,7 @@ while running:
     draw_coordinate_system()
     
     # 显示函数公式 - 始终只显示原始函数公式
-    screen.blit(formula_surface, (window_width - formula_surface.get_width() - 20, 20))
+    screen.blit(formula_surface, (WINDOW_WIDTH - formula_surface.get_width() - 20, 20))
     
     # 绘制导数模式下的彩色圆环
     if derivative_mode:
@@ -387,7 +447,7 @@ while running:
         # 检查是否需要重新绘制环缓存
         if needs_redraw or cached_rings_surface is None:
             # 创建新的透明Cairo表面
-            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, WINDOW_WIDTH, WINDOW_HEIGHT)
             ctx = cairo.Context(surface)
             ctx.set_antialias(cairo.ANTIALIAS_BEST)
             
@@ -406,13 +466,13 @@ while running:
             # 转换为Pygame表面
             surface.flush()
             buf = surface.get_data()
-            arr = np.ndarray(shape=(window_height, window_width, 4), 
+            arr = np.ndarray(shape=(WINDOW_HEIGHT, WINDOW_WIDTH, 4), 
                            dtype=np.uint8, 
                            buffer=buf)
             arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
             
             cached_rings_surface = pygame.image.frombuffer(
-                arr.tobytes(), (window_width, window_height), "RGBA"
+                arr.tobytes(), (WINDOW_WIDTH, WINDOW_HEIGHT), "RGBA"
             )
             needs_redraw = False
         
@@ -432,17 +492,17 @@ while running:
         
         # 根据按键更新鼠标位置
         if keys[pygame.K_w]:  # 上
-            mouse_y -= move_speed
+            mouse_y -= MOVE_SPEED
         if keys[pygame.K_s]:  # 下
-            mouse_y += move_speed
+            mouse_y += MOVE_SPEED
         if keys[pygame.K_a]:  # 左
-            mouse_x -= move_speed
+            mouse_x -= MOVE_SPEED
         if keys[pygame.K_d]:  # 右
-            mouse_x += move_speed
+            mouse_x += MOVE_SPEED
             
         # 确保鼠标位置不超出窗口范围
-        mouse_x = max(0, min(window_width, mouse_x))
-        mouse_y = max(0, min(window_height, mouse_y))
+        mouse_x = max(0, min(WINDOW_WIDTH, mouse_x))
+        mouse_y = max(0, min(WINDOW_HEIGHT, mouse_y))
         
         # 如果鼠标位置有变化，则更新轨迹
         if old_mouse_x != mouse_x or old_mouse_y != mouse_y:
@@ -581,3 +641,6 @@ while running:
 # 退出pygame
 pygame.quit()
 sys.exit()
+
+if __name__ == "__main__":
+    main()

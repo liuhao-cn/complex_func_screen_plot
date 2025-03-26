@@ -1,4 +1,6 @@
-numpy>=1.20.0
-matplotlib>=3.4.0
-pygame>=2.0.0
-scipy>=1.6.0
+# 核心依赖
+pygame==2.5.2
+numpy==1.26.4
+matplotlib==3.8.3
+pycairo==1.26.0
+scipy==1.12.0
