@@ -6,16 +6,17 @@ import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.cm import viridis, cividis, rainbow
+from scipy.interpolate import interp1d
 
 # 复数函数定义
 def complex_function(z):
     x = np.real(z)
     y = np.imag(z)
-    f = (x+y) + (x**2-y**2)*1j
+    f = (x-y)**2 + (x**2-y**2)*1j
     # f = np.sinh(z)
     return f
 
-func_str = f"$f(z)=x+y+(x^2-y^2)i$"
+func_str = f"$f(z)=(x-y)^2+(x^2-y^2)i$"
 
 # 设置窗口大小和标题
 window_width = 1200
@@ -26,7 +27,7 @@ move_speed = 2  # 增加移动速度以便更明显地看到效果
 # 导数模式设置
 RING_RADIUS = 24    # 圆环半径
 RING_WIDTH = 10     # 圆环宽度
-num_segments = 360 # 将导数圆环分为180段，每段2度
+num_segments = 120  # 将导数圆环分为120段，每段2度
 
 # 数值微分设置
 EPSILON = 1e-4  # 用于数值微分的小增量
@@ -45,7 +46,7 @@ except:
     small_chinese_font = pygame.font.SysFont(None, 20)
 
 # 创建窗口
-screen = pygame.display.set_mode((window_width, window_height))
+screen = pygame.display.set_mode((window_width, window_height), pygame.DOUBLEBUF | pygame.HWSURFACE)
 pygame.display.set_caption("复数函数可视化")
 
 # 设置颜色
@@ -229,52 +230,142 @@ formula_surface = render_math_formula(func_str)
 
 # 绘制dz圆环函数
 def draw_dz_ring(x, y):
-    """在指定位置绘制表示dz的彩色圆环"""
-    # 圆环的角度范围：0-360度
-    for i in range(num_segments):
-        # 计算当前段的起始和结束角度（弧度）
-        start_angle = 2 * np.pi * i / num_segments
-        end_angle = 2 * np.pi * (i + 1) / num_segments
+    """使用抗锯齿技术绘制表示dz的彩色圆环"""
+    # 创建一个临时透明表面用于抗锯齿效果
+    temp_surface = pygame.Surface((window_width, window_height), pygame.SRCALPHA)
+    
+    # 增加采样点以获得更平滑的环
+    oversample = 4  # 与df环使用相同的过采样因子
+    num_render_segments = num_segments * oversample
+    
+    # 计算内环和外环的点
+    inner_points = []
+    outer_points = []
+    
+    # 绘制平滑圆环
+    for i in range(num_render_segments):
+        # 计算当前段的角度（弧度）
+        angle = 2 * np.pi * i / num_render_segments
+        next_angle = 2 * np.pi * (i + 1) / num_render_segments
         
-        # 计算颜色（使用viridis色彩映射）
-        color_val = i / num_segments
+        # 计算内环和外环的点
+        inner_x1 = x + (RING_RADIUS - RING_WIDTH/2) * np.cos(angle)
+        inner_y1 = y - (RING_RADIUS - RING_WIDTH/2) * np.sin(angle)
+        inner_x2 = x + (RING_RADIUS - RING_WIDTH/2) * np.cos(next_angle)
+        inner_y2 = y - (RING_RADIUS - RING_WIDTH/2) * np.sin(next_angle)
+        
+        outer_x1 = x + (RING_RADIUS + RING_WIDTH/2) * np.cos(angle)
+        outer_y1 = y - (RING_RADIUS + RING_WIDTH/2) * np.sin(angle)
+        outer_x2 = x + (RING_RADIUS + RING_WIDTH/2) * np.cos(next_angle)
+        outer_y2 = y - (RING_RADIUS + RING_WIDTH/2) * np.sin(next_angle)
+        
+        # 计算当前扇形的四个顶点
+        poly_points = [
+            (inner_x1, inner_y1),
+            (inner_x2, inner_y2),
+            (outer_x2, outer_y2),
+            (outer_x1, outer_y1)
+        ]
+        
+        # 计算颜色
+        # 将过采样点映射回原始角度索引
+        orig_angle_idx = int((i * num_segments) / num_render_segments)
+        color_val = orig_angle_idx / num_segments
         color = tuple(int(c * 255) for c in viridis(color_val)[:3])
         
-        # 绘制圆弧段
-        pygame.draw.arc(screen, color, 
-                        [x - RING_RADIUS, y - RING_RADIUS, 
-                         2 * RING_RADIUS, 2 * RING_RADIUS], 
-                        start_angle, end_angle, RING_WIDTH)
+        # 绘制抗锯齿边界线
+        pygame.draw.aalines(temp_surface, color, True, poly_points, 1)
+        
+        # 填充多边形
+        pygame.draw.polygon(temp_surface, color, poly_points)
+    
+    # 将临时表面绘制到屏幕上
+    screen.blit(temp_surface, (0, 0))
 
 # 绘制df变形环函数
 def draw_df_ring(x, y, dz_angles, dfs):
-    """在指定位置绘制表示df的变形环
-    df_derivatives: 包含多个方向导数值的列表，每个元素是(角度,导数值)的元组
-    """
-    # 遍历每个方向的导数值
-    N = len(dz_angles)
-    for i in range(N):
-        # 获取当前方向导数的模和辐角
-        df_abs = abs(dfs[i])
-        df_angle = np.angle(dfs[i])
+    """结合抗锯齿和过采样技术绘制平滑的df变形环"""
+    # 计算每个角度对应的导数模值和辐角
+    df_abs_values = np.array([abs(df) for df in dfs])
+    df_angles = np.array([np.angle(df) for df in dfs])
+    
+    # 为确保环形闭合，添加首尾连接点
+    angles_ext = np.append(dz_angles, dz_angles[0])
+    df_abs_ext = np.append(df_abs_values, df_abs_values[0])
+    
+    # 创建一个临时透明表面用于抗锯齿效果
+    temp_surface = pygame.Surface((window_width, window_height), pygame.SRCALPHA)
+    
+    # 计算内环和外环的点
+    inner_points = []
+    outer_points = []
+    
+    # 增加采样点数量获得更平滑的环
+    oversample = 6  # 过采样因子
+    smooth_angles = np.linspace(0, 2*np.pi, num_segments*oversample, endpoint=False)
+    
+    # 使用插值计算平滑点的半径值
+    # 使用循环方式重复数据以确保连续性
+    full_angles = np.concatenate([dz_angles, dz_angles + 2*np.pi])
+    full_df_abs = np.concatenate([df_abs_values, df_abs_values])
+    
+    # 对每个平滑角度进行插值
+    smooth_radii = []
+    for angle in smooth_angles:
+        # 找到最近的两个点用于插值
+        idx = np.searchsorted(full_angles, angle) - 1
+        idx = max(0, min(idx, len(full_angles)-2))
         
-        # 计算颜色（使用viridis色彩映射，使用df角度索引）
-        # 将df_angle一化到[0, 1]范围内来选择颜色
-        color_val = (dz_angles[i] % (2 * np.pi)) / (2 * np.pi)  # 保持与dz环相同的颜色映射
-        color = tuple(int(c * 255) for c in rainbow(color_val)[:3])
+        # 线性插值
+        t = (angle - full_angles[idx]) / (full_angles[idx+1] - full_angles[idx])
+        radius = full_df_abs[idx] + t * (full_df_abs[idx+1] - full_df_abs[idx])
+        smooth_radii.append(radius)
+    
+    # 计算内外环上的所有点
+    for i, angle in enumerate(smooth_angles):
+        # 导数的模值决定环的大小
+        radius = RING_RADIUS * smooth_radii[i]
         
-        # 计算变形环上的点
-        # 半径根据导数的模进行缩放
-        radius = RING_RADIUS * df_abs
-        # 计算当前段的起始和结束点
-        segment_width = 2 * np.pi / num_segments
-        start_x = x + radius * np.cos(df_angle - segment_width/2)
-        start_y = y - radius * np.sin(df_angle - segment_width/2)
-        end_x = x + radius * np.cos(df_angle + segment_width/2)
-        end_y = y - radius * np.sin(df_angle + segment_width/2)
+        # 计算内环和外环的半径
+        inner_radius = max(0, radius - RING_WIDTH/2)
+        outer_radius = radius + RING_WIDTH/2
         
-        # 绘制弧段（由于可能不是圆形，所以使用线段代替弧）
-        pygame.draw.line(screen, color, (start_x, start_y), (end_x, end_y), RING_WIDTH)
+        # 计算内环点和外环点
+        inner_x = x + inner_radius * np.cos(angle)
+        inner_y = y - inner_radius * np.sin(angle)
+        outer_x = x + outer_radius * np.cos(angle)
+        outer_y = y - outer_radius * np.sin(angle)
+        
+        inner_points.append((inner_x, inner_y))
+        outer_points.append((outer_x, outer_y))
+    
+    # 绘制每个扇形段的填充多边形
+    for i in range(len(smooth_angles)):
+        next_i = (i + 1) % len(smooth_angles)
+        
+        # 计算当前扇形的四个顶点
+        poly_points = [
+            inner_points[i],
+            inner_points[next_i],
+            outer_points[next_i],
+            outer_points[i]
+        ]
+        
+        # 计算对应的原始角度索引（映射回原始角度）
+        orig_angle_idx = int((i * num_segments) / (num_segments * oversample))
+        
+        # 计算颜色（使用viridis色彩映射）
+        color_val = (dz_angles[orig_angle_idx] % (2 * np.pi)) / (2 * np.pi)
+        color = tuple(int(c * 255) for c in viridis(color_val)[:3])
+        
+        # 绘制抗锯齿边界线
+        pygame.draw.aalines(temp_surface, color, True, poly_points, 1)
+        
+        # 填充多边形
+        pygame.draw.polygon(temp_surface, color, poly_points)
+    
+    # 将临时表面绘制到屏幕上
+    screen.blit(temp_surface, (0, 0))
 
 # 主循环
 running = True
