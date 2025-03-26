@@ -13,11 +13,11 @@ import cairo  # 新增 Cairo 导入
 def complex_function(z):
     x = np.real(z)
     y = np.imag(z)
-    f = x-y + (x**2-y**2)*1j
+    f = (x-y)**2 + (x**2-y**2)*1j
     # f = np.sinh(z)
     return f
 
-func_str = f"$f(z)=x-y+(x^2-y^2)i$"
+func_str = f"$f(z)=(x-y)^2+(x^2-y^2)i$"
 
 # 设置窗口大小和标题
 window_width = 1200
@@ -28,7 +28,7 @@ move_speed = 2  # 增加移动速度以便更明显地看到效果
 # 导数模式设置
 RING_RADIUS = 24    # 圆环半径
 RING_WIDTH = 10     # 圆环宽度
-num_segments = 60   # 将导数圆环分为120段，每段2度
+num_segments = 360  # 将导数圆环分为120段，每段2度
 oversample = 1      # 更高的过采样因子
 
 # 数值微分设置
@@ -79,6 +79,9 @@ ring_info_list = []
 # 初始化鼠标位置变量
 mouse_x, mouse_y = origin_x, origin_y
 
+# 在全局变量定义处添加
+cached_rings_surface = None  # 用于缓存所有环的Pygame表面
+needs_redraw = False  # 标记是否需要重新绘制环缓存
 
 # 使用数值微分计算导数（向量化版本）
 def numerical_derivative(z):
@@ -230,13 +233,9 @@ def render_math_formula(formula, size=16):
 # 渲染数学公式
 formula_surface = render_math_formula(func_str)
 
-# 绘制dz圆环函数 - Cairo版本
-def draw_dz_ring(x, y):
-    """使用Cairo绘制高质量抗锯齿圆环"""
-    # 创建一个Cairo表面和上下文
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
-    ctx = cairo.Context(surface)
-    
+# 修改环绘制函数为接受上下文的形式
+def draw_dz_ring_on_context(ctx, x, y):
+    """在给定的Cairo上下文中绘制dz环"""
     # 设置高质量抗锯齿
     ctx.set_antialias(cairo.ANTIALIAS_BEST)
     
@@ -274,33 +273,9 @@ def draw_dz_ring(x, y):
         ctx.set_line_width(0.5)
         ctx.set_source_rgba(r, g, b, 0.8)
         ctx.stroke()
-    
-    # 将Cairo表面转换为Pygame表面
-    surface.flush()
-    # 获取缓冲区数据
-    buf = surface.get_data()
-    # 使用numpy创建数组视图，然后调整顺序以匹配Pygame期望的格式
-    arr = np.ndarray(shape=(window_height, window_width, 4), 
-                     dtype=np.uint8, 
-                     buffer=buf)
-    # 调整ARGB到Pygame期望的RGBA，并处理字节顺序问题
-    arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
-    
-    # 创建pygame表面
-    cairo_surface = pygame.image.frombuffer(
-        arr.tobytes(), (window_width, window_height), "RGBA"
-    )
-    
-    # 绘制到屏幕
-    screen.blit(cairo_surface, (0, 0))
 
-# 绘制df变形环函数 - Cairo版本
-def draw_df_ring(x, y, dz_angles, dfs):
-    """使用Cairo绘制高质量抗锯齿变形环"""
-    # 创建Cairo表面和上下文
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
-    ctx = cairo.Context(surface)
-    
+def draw_df_ring_on_context(ctx, x, y, dz_angles, dfs):
+    """在给定的Cairo上下文中绘制df环"""
     # 设置高质量抗锯齿
     ctx.set_antialias(cairo.ANTIALIAS_BEST)
     
@@ -308,10 +283,9 @@ def draw_df_ring(x, y, dz_angles, dfs):
     df_abs_values = np.array([abs(df) for df in dfs])
     
     # 创建平滑插值版本的半径
-    # 增加采样点数量获得更平滑的环
     smooth_angles = np.linspace(0, 2*np.pi, num_segments*oversample, endpoint=False)
     
-    # 为了确保环形闭合，扩展角度和模值数组
+    # 扩展角度和模值数组以确保环形闭合
     angles_ext = np.append(dz_angles, dz_angles[0] + 2*np.pi)
     df_abs_ext = np.append(df_abs_values, df_abs_values[0])
     
@@ -382,25 +356,6 @@ def draw_df_ring(x, y, dz_angles, dfs):
         ctx.set_line_width(0.5)
         ctx.set_source_rgba(r, g, b, 0.8)
         ctx.stroke()
-    
-    # 将Cairo表面转换为Pygame表面
-    surface.flush()
-    # 获取缓冲区数据
-    buf = surface.get_data()
-    # 使用numpy创建数组视图，然后调整顺序以匹配Pygame期望的格式
-    arr = np.ndarray(shape=(window_height, window_width, 4), 
-                     dtype=np.uint8, 
-                     buffer=buf)
-    # 调整ARGB到Pygame期望的RGBA，并处理字节顺序问题
-    arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
-    
-    # 创建pygame表面
-    cairo_surface = pygame.image.frombuffer(
-        arr.tobytes(), (window_width, window_height), "RGBA"
-    )
-    
-    # 绘制到屏幕
-    screen.blit(cairo_surface, (0, 0))
 
 # 主循环
 running = True
@@ -429,11 +384,41 @@ while running:
         # 显示当前坐标信息（包括导数）
         show_coordinates((mouse_x, mouse_y), mouse2Z(mouse_x, mouse_y), True)
         
-        # 如果有已保存的圆环信息，则绘制所有圆环
-        for ring_info in ring_info_list:
-            input_pos, output_pos, dz_angles, dfs = ring_info
-            draw_dz_ring(*input_pos)
-            draw_df_ring(*output_pos, dz_angles, dfs)
+        # 检查是否需要重新绘制环缓存
+        if needs_redraw or cached_rings_surface is None:
+            # 创建新的透明Cairo表面
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
+            ctx = cairo.Context(surface)
+            ctx.set_antialias(cairo.ANTIALIAS_BEST)
+            
+            # 先填充透明背景
+            ctx.set_source_rgba(0, 0, 0, 0)  # 完全透明
+            ctx.paint()
+            
+            # 如果有环需要绘制
+            if ring_info_list:
+                # 绘制所有环
+                for ring_info in ring_info_list:
+                    input_pos, output_pos, dz_angles, dfs = ring_info
+                    draw_dz_ring_on_context(ctx, *input_pos)
+                    draw_df_ring_on_context(ctx, *output_pos, dz_angles, dfs)
+            
+            # 转换为Pygame表面
+            surface.flush()
+            buf = surface.get_data()
+            arr = np.ndarray(shape=(window_height, window_width, 4), 
+                           dtype=np.uint8, 
+                           buffer=buf)
+            arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
+            
+            cached_rings_surface = pygame.image.frombuffer(
+                arr.tobytes(), (window_width, window_height), "RGBA"
+            )
+            needs_redraw = False
+        
+        # 绘制缓存表面
+        if cached_rings_surface is not None:
+            screen.blit(cached_rings_surface, (0, 0))
     # 如果在跟踪模式下
     elif tracking_mode:
         # 隐藏鼠标
@@ -496,66 +481,73 @@ while running:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:  # ESC键清除轨迹，不退出程序
+            if event.key == pygame.K_ESCAPE:  # ESC键清除轨迹
                 mouse_trail = []
                 function_trail = []
                 ring_info_list = []  # 清除所有圆环信息
+                cached_rings_surface = None  # 清除缓存表面
+                needs_redraw = True  # 标记需要重新绘制
             elif event.key == pygame.K_c:  # C键清除轨迹
                 mouse_trail = []
                 function_trail = []
                 ring_info_list = []  # 清除所有圆环信息
+                cached_rings_surface = None  # 清除缓存表面
+                needs_redraw = True
             elif event.key == pygame.K_p:  # P键切换导数模式
                 derivative_mode = not derivative_mode
-                # 清除轨迹
+                # 清除轨迹和环
                 mouse_trail = []
                 function_trail = []
                 ring_info_list = []  # 清除所有圆环信息
+                cached_rings_surface = None  # 清除缓存表面
+                needs_redraw = True  # 标记需要重新绘制
+                
                 # 如果进入导数模式，退出跟踪模式
                 if derivative_mode:
                     tracking_mode = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # 鼠标左键
-                if derivative_mode:
-                    # 在导数模式下，绘制彩色圆环
-                    mouse_x, mouse_y = pygame.mouse.get_pos()
+            if event.button == 1 and derivative_mode:  # 导数模式下左键点击
+                # 在导数模式下，绘制彩色圆环
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                z = mouse2Z(mouse_x, mouse_y)
+                
+                # 计算导数 - 使用数值微分，获取多个方向的导数值
+                dz_angles, dfs = numerical_derivative(z)
+                
+                # 计算函数值位置
+                f_z = complex_function(z)
+                f_pos_x, f_pos_y = z2mouse(f_z)
+                
+                # 保存圆环信息到列表中，不再覆盖之前的圆环
+                ring_info_list.append(((mouse_x, mouse_y), (f_pos_x, f_pos_y), dz_angles, dfs))
+                needs_redraw = True  # 标记需要重新绘制
+            elif event.button == 1:  # 鼠标左键
+                # 进入跟踪模式
+                tracking_mode = True
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                
+                # 如果需要开始新的轨迹段
+                if new_trail_segment:
+                    # 不清除现有轨迹，而是添加None作为分隔符
+                    # 确保在添加新点之前添加分隔符，防止连接到上一段轨迹
+                    if mouse_trail and function_trail:
+                        mouse_trail.append(None)
+                        function_trail.append(None)
+                    
+                    # 添加新的起始点
+                    mouse_trail.append((mouse_x, mouse_y))
+                    
+                    # 计算初始函数值
                     z = mouse2Z(mouse_x, mouse_y)
-                    
-                    # 计算导数 - 使用数值微分，获取多个方向的导数值
-                    dz_angles, dfs = numerical_derivative(z)
-                    
-                    # 计算函数值位置
                     f_z = complex_function(z)
-                    f_pos_x, f_pos_y = z2mouse(f_z)
+                    f_pos = z2mouse(f_z)
+                    function_trail.append(f_pos)
                     
-                    # 保存圆环信息到列表中，不再覆盖之前的圆环
-                    ring_info_list.append(((mouse_x, mouse_y), (f_pos_x, f_pos_y), dz_angles, dfs))
+                    # 重置标志
+                    new_trail_segment = False
                 else:
-                    # 进入跟踪模式
-                    tracking_mode = True
-                    mouse_x, mouse_y = pygame.mouse.get_pos()
-                    
-                    # 如果需要开始新的轨迹段
-                    if new_trail_segment:
-                        # 不清除现有轨迹，而是添加None作为分隔符
-                        # 确保在添加新点之前添加分隔符，防止连接到上一段轨迹
-                        if mouse_trail and function_trail:
-                            mouse_trail.append(None)
-                            function_trail.append(None)
-                        
-                        # 添加新的起始点
-                        mouse_trail.append((mouse_x, mouse_y))
-                        
-                        # 计算初始函数值
-                        z = mouse2Z(mouse_x, mouse_y)
-                        f_z = complex_function(z)
-                        f_pos = z2mouse(f_z)
-                        function_trail.append(f_pos)
-                        
-                        # 重置标志
-                        new_trail_segment = False
-                    else:
-                        # 继续现有轨迹
-                        f_pos = update_function_point((mouse_x, mouse_y))
+                    # 继续现有轨迹
+                    f_pos = update_function_point((mouse_x, mouse_y))
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:  # 鼠标左键释放
                 # 继续保持跟踪模式，不清除轨迹
