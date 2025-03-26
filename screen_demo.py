@@ -7,16 +7,17 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.cm import viridis, cividis, rainbow
 from scipy.interpolate import interp1d
+import cairo  # 新增 Cairo 导入
 
 # 复数函数定义
 def complex_function(z):
     x = np.real(z)
     y = np.imag(z)
-    f = (x-y)**2 + (x**2-y**2)*1j
+    f = x-y + (x**2-y**2)*1j
     # f = np.sinh(z)
     return f
 
-func_str = f"$f(z)=(x-y)^2+(x^2-y^2)i$"
+func_str = f"$f(z)=x-y+(x^2-y^2)i$"
 
 # 设置窗口大小和标题
 window_width = 1200
@@ -27,7 +28,8 @@ move_speed = 2  # 增加移动速度以便更明显地看到效果
 # 导数模式设置
 RING_RADIUS = 24    # 圆环半径
 RING_WIDTH = 10     # 圆环宽度
-num_segments = 120  # 将导数圆环分为120段，每段2度
+num_segments = 60   # 将导数圆环分为120段，每段2度
+oversample = 1      # 更高的过采样因子
 
 # 数值微分设置
 EPSILON = 1e-4  # 用于数值微分的小增量
@@ -228,144 +230,177 @@ def render_math_formula(formula, size=16):
 # 渲染数学公式
 formula_surface = render_math_formula(func_str)
 
-# 绘制dz圆环函数
+# 绘制dz圆环函数 - Cairo版本
 def draw_dz_ring(x, y):
-    """使用抗锯齿技术绘制表示dz的彩色圆环"""
-    # 创建一个临时透明表面用于抗锯齿效果
-    temp_surface = pygame.Surface((window_width, window_height), pygame.SRCALPHA)
+    """使用Cairo绘制高质量抗锯齿圆环"""
+    # 创建一个Cairo表面和上下文
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
+    ctx = cairo.Context(surface)
+    
+    # 设置高质量抗锯齿
+    ctx.set_antialias(cairo.ANTIALIAS_BEST)
     
     # 增加采样点以获得更平滑的环
-    oversample = 4  # 与df环使用相同的过采样因子
     num_render_segments = num_segments * oversample
-    
-    # 计算内环和外环的点
-    inner_points = []
-    outer_points = []
     
     # 绘制平滑圆环
     for i in range(num_render_segments):
-        # 计算当前段的角度（弧度）
+        # 计算当前段的角度和下一段角度
         angle = 2 * np.pi * i / num_render_segments
         next_angle = 2 * np.pi * (i + 1) / num_render_segments
         
-        # 计算内环和外环的点
-        inner_x1 = x + (RING_RADIUS - RING_WIDTH/2) * np.cos(angle)
-        inner_y1 = y - (RING_RADIUS - RING_WIDTH/2) * np.sin(angle)
-        inner_x2 = x + (RING_RADIUS - RING_WIDTH/2) * np.cos(next_angle)
-        inner_y2 = y - (RING_RADIUS - RING_WIDTH/2) * np.sin(next_angle)
-        
-        outer_x1 = x + (RING_RADIUS + RING_WIDTH/2) * np.cos(angle)
-        outer_y1 = y - (RING_RADIUS + RING_WIDTH/2) * np.sin(angle)
-        outer_x2 = x + (RING_RADIUS + RING_WIDTH/2) * np.cos(next_angle)
-        outer_y2 = y - (RING_RADIUS + RING_WIDTH/2) * np.sin(next_angle)
-        
-        # 计算当前扇形的四个顶点
-        poly_points = [
-            (inner_x1, inner_y1),
-            (inner_x2, inner_y2),
-            (outer_x2, outer_y2),
-            (outer_x1, outer_y1)
-        ]
-        
-        # 计算颜色
-        # 将过采样点映射回原始角度索引
+        # 映射到原始段以获取颜色
         orig_angle_idx = int((i * num_segments) / num_render_segments)
         color_val = orig_angle_idx / num_segments
-        color = tuple(int(c * 255) for c in viridis(color_val)[:3])
+        r, g, b, _ = viridis(color_val)
         
-        # 绘制抗锯齿边界线
-        pygame.draw.aalines(temp_surface, color, True, poly_points, 1)
+        # 创建路径
+        ctx.new_path()
         
-        # 填充多边形
-        pygame.draw.polygon(temp_surface, color, poly_points)
+        # 内环点
+        inner_radius = RING_RADIUS - RING_WIDTH/2
+        outer_radius = RING_RADIUS + RING_WIDTH/2
+        
+        # 绘制扇形路径
+        ctx.arc(x, y, inner_radius, angle, next_angle)
+        ctx.arc_negative(x, y, outer_radius, next_angle, angle)
+        ctx.close_path()
+        
+        # 设置颜色并填充
+        ctx.set_source_rgb(r, g, b)
+        ctx.fill_preserve()
+        
+        # 添加细微边缘以增强视觉效果
+        ctx.set_line_width(0.5)
+        ctx.set_source_rgba(r, g, b, 0.8)
+        ctx.stroke()
     
-    # 将临时表面绘制到屏幕上
-    screen.blit(temp_surface, (0, 0))
+    # 将Cairo表面转换为Pygame表面
+    surface.flush()
+    # 获取缓冲区数据
+    buf = surface.get_data()
+    # 使用numpy创建数组视图，然后调整顺序以匹配Pygame期望的格式
+    arr = np.ndarray(shape=(window_height, window_width, 4), 
+                     dtype=np.uint8, 
+                     buffer=buf)
+    # 调整ARGB到Pygame期望的RGBA，并处理字节顺序问题
+    arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
+    
+    # 创建pygame表面
+    cairo_surface = pygame.image.frombuffer(
+        arr.tobytes(), (window_width, window_height), "RGBA"
+    )
+    
+    # 绘制到屏幕
+    screen.blit(cairo_surface, (0, 0))
 
-# 绘制df变形环函数
+# 绘制df变形环函数 - Cairo版本
 def draw_df_ring(x, y, dz_angles, dfs):
-    """结合抗锯齿和过采样技术绘制平滑的df变形环"""
-    # 计算每个角度对应的导数模值和辐角
+    """使用Cairo绘制高质量抗锯齿变形环"""
+    # 创建Cairo表面和上下文
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, window_width, window_height)
+    ctx = cairo.Context(surface)
+    
+    # 设置高质量抗锯齿
+    ctx.set_antialias(cairo.ANTIALIAS_BEST)
+    
+    # 计算每个角度对应的导数模值
     df_abs_values = np.array([abs(df) for df in dfs])
-    df_angles = np.array([np.angle(df) for df in dfs])
     
-    # 为确保环形闭合，添加首尾连接点
-    angles_ext = np.append(dz_angles, dz_angles[0])
-    df_abs_ext = np.append(df_abs_values, df_abs_values[0])
-    
-    # 创建一个临时透明表面用于抗锯齿效果
-    temp_surface = pygame.Surface((window_width, window_height), pygame.SRCALPHA)
-    
-    # 计算内环和外环的点
-    inner_points = []
-    outer_points = []
-    
+    # 创建平滑插值版本的半径
     # 增加采样点数量获得更平滑的环
-    oversample = 6  # 过采样因子
     smooth_angles = np.linspace(0, 2*np.pi, num_segments*oversample, endpoint=False)
     
-    # 使用插值计算平滑点的半径值
-    # 使用循环方式重复数据以确保连续性
-    full_angles = np.concatenate([dz_angles, dz_angles + 2*np.pi])
-    full_df_abs = np.concatenate([df_abs_values, df_abs_values])
+    # 为了确保环形闭合，扩展角度和模值数组
+    angles_ext = np.append(dz_angles, dz_angles[0] + 2*np.pi)
+    df_abs_ext = np.append(df_abs_values, df_abs_values[0])
     
-    # 对每个平滑角度进行插值
-    smooth_radii = []
-    for angle in smooth_angles:
-        # 找到最近的两个点用于插值
-        idx = np.searchsorted(full_angles, angle) - 1
-        idx = max(0, min(idx, len(full_angles)-2))
-        
-        # 线性插值
-        t = (angle - full_angles[idx]) / (full_angles[idx+1] - full_angles[idx])
-        radius = full_df_abs[idx] + t * (full_df_abs[idx+1] - full_df_abs[idx])
-        smooth_radii.append(radius)
-    
-    # 计算内外环上的所有点
-    for i, angle in enumerate(smooth_angles):
-        # 导数的模值决定环的大小
-        radius = RING_RADIUS * smooth_radii[i]
-        
-        # 计算内环和外环的半径
-        inner_radius = max(0, radius - RING_WIDTH/2)
-        outer_radius = radius + RING_WIDTH/2
-        
-        # 计算内环点和外环点
-        inner_x = x + inner_radius * np.cos(angle)
-        inner_y = y - inner_radius * np.sin(angle)
-        outer_x = x + outer_radius * np.cos(angle)
-        outer_y = y - outer_radius * np.sin(angle)
-        
-        inner_points.append((inner_x, inner_y))
-        outer_points.append((outer_x, outer_y))
-    
-    # 绘制每个扇形段的填充多边形
+    # 对每一段绘制扇形
     for i in range(len(smooth_angles)):
-        next_i = (i + 1) % len(smooth_angles)
+        idx = i
+        next_idx = (i + 1) % len(smooth_angles)
         
-        # 计算当前扇形的四个顶点
-        poly_points = [
-            inner_points[i],
-            inner_points[next_i],
-            outer_points[next_i],
-            outer_points[i]
-        ]
+        # 计算当前角度和下一个角度
+        angle = smooth_angles[idx]
+        next_angle = smooth_angles[next_idx]
         
-        # 计算对应的原始角度索引（映射回原始角度）
+        # 使用插值计算当前角度和下一个角度的半径
+        # 找到最近的两个采样点
+        idx_orig = np.searchsorted(angles_ext, angle) - 1
+        idx_orig = max(0, min(idx_orig, len(angles_ext)-2))
+        next_idx_orig = np.searchsorted(angles_ext, next_angle) - 1
+        next_idx_orig = max(0, min(next_idx_orig, len(angles_ext)-2))
+        
+        # 线性插值计算半径
+        t1 = (angle - angles_ext[idx_orig]) / (angles_ext[idx_orig+1] - angles_ext[idx_orig])
+        radius = df_abs_ext[idx_orig] + t1 * (df_abs_ext[idx_orig+1] - df_abs_ext[idx_orig])
+        
+        t2 = (next_angle - angles_ext[next_idx_orig]) / (angles_ext[next_idx_orig+1] - angles_ext[next_idx_orig])
+        next_radius = df_abs_ext[next_idx_orig] + t2 * (df_abs_ext[next_idx_orig+1] - df_abs_ext[next_idx_orig])
+        
+        # 缩放半径
+        radius = RING_RADIUS * radius
+        next_radius = RING_RADIUS * next_radius
+        
+        # 确定颜色（与dz环保持一致的颜色映射）
         orig_angle_idx = int((i * num_segments) / (num_segments * oversample))
-        
-        # 计算颜色（使用viridis色彩映射）
         color_val = (dz_angles[orig_angle_idx] % (2 * np.pi)) / (2 * np.pi)
-        color = tuple(int(c * 255) for c in viridis(color_val)[:3])
+        r, g, b, _ = viridis(color_val)
         
-        # 绘制抗锯齿边界线
-        pygame.draw.aalines(temp_surface, color, True, poly_points, 1)
+        # 创建新路径
+        ctx.new_path()
         
-        # 填充多边形
-        pygame.draw.polygon(temp_surface, color, poly_points)
+        # 确定内外半径
+        inner_radius1 = max(0, radius - RING_WIDTH/2)
+        outer_radius1 = radius + RING_WIDTH/2
+        inner_radius2 = max(0, next_radius - RING_WIDTH/2)
+        outer_radius2 = next_radius + RING_WIDTH/2
+        
+        # 计算内外环上的点坐标
+        inner_x1 = x + inner_radius1 * np.cos(angle)
+        inner_y1 = y - inner_radius1 * np.sin(angle)
+        inner_x2 = x + inner_radius2 * np.cos(next_angle)
+        inner_y2 = y - inner_radius2 * np.sin(next_angle)
+        
+        outer_x1 = x + outer_radius1 * np.cos(angle)
+        outer_y1 = y - outer_radius1 * np.sin(angle)
+        outer_x2 = x + outer_radius2 * np.cos(next_angle)
+        outer_y2 = y - outer_radius2 * np.sin(next_angle)
+        
+        # 绘制扇形路径
+        ctx.move_to(inner_x1, inner_y1)
+        ctx.line_to(inner_x2, inner_y2)
+        ctx.line_to(outer_x2, outer_y2)
+        ctx.line_to(outer_x1, outer_y1)
+        ctx.close_path()
+        
+        # 设置颜色并填充
+        ctx.set_source_rgb(r, g, b)
+        ctx.fill_preserve()
+        
+        # 添加细微边缘以增强视觉效果
+        ctx.set_line_width(0.5)
+        ctx.set_source_rgba(r, g, b, 0.8)
+        ctx.stroke()
     
-    # 将临时表面绘制到屏幕上
-    screen.blit(temp_surface, (0, 0))
+    # 将Cairo表面转换为Pygame表面
+    surface.flush()
+    # 获取缓冲区数据
+    buf = surface.get_data()
+    # 使用numpy创建数组视图，然后调整顺序以匹配Pygame期望的格式
+    arr = np.ndarray(shape=(window_height, window_width, 4), 
+                     dtype=np.uint8, 
+                     buffer=buf)
+    # 调整ARGB到Pygame期望的RGBA，并处理字节顺序问题
+    arr = arr[:, :, [2, 1, 0, 3]]  # BGRA to RGBA
+    
+    # 创建pygame表面
+    cairo_surface = pygame.image.frombuffer(
+        arr.tobytes(), (window_width, window_height), "RGBA"
+    )
+    
+    # 绘制到屏幕
+    screen.blit(cairo_surface, (0, 0))
 
 # 主循环
 running = True
